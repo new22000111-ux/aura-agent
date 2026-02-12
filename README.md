@@ -19,7 +19,7 @@ an **open source** web agent
 - **npm install**
 - **npm start**
 - open your browser and go to **http://localhost:3000/**
-  *🎉 Your Aura Agent is now running locally, fully functional and ready for testing.*
+*🎉 Your Aura Agent is now running locally, fully functional and ready for testing.*
   -------------------------------------------------------------
   
 I am not responsible for what you do with this agent or what it causes you.
