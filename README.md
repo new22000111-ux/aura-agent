@@ -14,10 +14,13 @@ an **open source** web agent
 - than visit the **website**
   ------------------------------------------------------------------
   # second way 2️⃣
-- **githttps://github.com/new22000111-ux/aura-agent.git**
+- **git https://github.com/new22000111-ux/aura-agent.git**
 - **cd aura-agent**
 - **npm install**
 - **npm start**
 - open your browser and go to **http://localhost:3000/**
-  **🎉 Your Aura Agent is now running locally, fully functional and ready for testing.**
+  *🎉 Your Aura Agent is now running locally, fully functional and ready for testing.*
   -------------------------------------------------------------
+  
+I am not responsible for what you do with this agent or what it causes you.
+-
