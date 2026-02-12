@@ -57,8 +57,17 @@ class GithubService {
         if (!res.ok) throw new Error(`GitHub API Error: ${res.statusText}`);
         
         const data = await res.json();
-        // content is base64 encoded
-        const content = new TextDecoder().decode(Uint8Array.from(atob(data.content), c => c.charCodeAt(0)));
+        
+        // GitHub API returns content in Base64. We need to decode it properly to UTF-8.
+        // Handling newlines in base64 from GitHub
+        const cleanBase64 = data.content.replace(/\n/g, '');
+        const binaryString = atob(cleanBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        const content = new TextDecoder().decode(bytes);
+        
         return { content, sha: data.sha };
     }
 
@@ -72,8 +81,13 @@ class GithubService {
             sha = existing.sha;
         } catch (e) { /* New file */ }
 
-        // 2. Encode content
-        const contentEncoded = btoa(unescape(encodeURIComponent(content)));
+        // 2. Encode content to Base64 (UTF-8 safe)
+        const bytes = new TextEncoder().encode(content);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        const contentEncoded = btoa(binary);
 
         // 3. Push
         const url = `https://api.github.com/repos/${this.config!.owner}/${this.config!.repo}/contents/${path}`;
@@ -98,12 +112,14 @@ class GithubService {
 
     async pullRepo(recursive: boolean = true): Promise<string> {
         if (!this.isConfigured()) throw new Error("GitHub not configured");
-        // Get the default branch tree
-        // First get repo info to find default branch
+        
+        // 1. Get default branch
         const repoRes = await fetch(`https://api.github.com/repos/${this.config!.owner}/${this.config!.repo}`, { headers: this.getHeaders() });
+        if (!repoRes.ok) throw new Error("Failed to fetch repository info");
         const repoData = await repoRes.json();
         const branch = repoData.default_branch;
 
+        // 2. Get Tree (List of all files)
         const treeUrl = `https://api.github.com/repos/${this.config!.owner}/${this.config!.repo}/git/trees/${branch}?recursive=${recursive ? 1 : 0}`;
         const res = await fetch(treeUrl, { headers: this.getHeaders() });
         if (!res.ok) throw new Error("Failed to fetch repo tree");
@@ -111,22 +127,16 @@ class GithubService {
         const data = await res.json();
         let count = 0;
 
-        // Filter for blobs (files), limit to avoid browser crash on massive repos
+        // 3. Filter for files (blobs) and limit to avoid freezing the browser on huge repos
         const files = data.tree.filter((node: any) => node.type === 'blob').slice(0, 50);
 
+        // 4. Fetch content for each file using the API (Compatible with Private Repos)
         for (const file of files) {
-            // Fetch individual file content (raw)
             try {
-                // Using raw content URL is faster than API JSON for bulk
-                const rawUrl = `https://raw.githubusercontent.com/${this.config!.owner}/${this.config!.repo}/${branch}/${file.path}`;
-                const fileRes = await fetch(rawUrl, { 
-                    headers: { 'Authorization': `Bearer ${this.config!.token}` } 
-                });
-                if (fileRes.ok) {
-                    const text = await fileRes.text();
-                    vfs.writeFile(file.path, text);
-                    count++;
-                }
+                // We use our own getFile method which uses the API endpoint correctly
+                const fileData = await this.getFile(file.path);
+                vfs.writeFile(file.path, fileData.content);
+                count++;
             } catch (e) {
                 console.warn(`Skipped ${file.path}`, e);
             }

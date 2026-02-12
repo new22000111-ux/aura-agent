@@ -1,38 +1,20 @@
-# WELCOME TO AURA AGENT 👋🏻
-an **open source** web agent
-- safe
-- secure
-- better than **openport (claw)**
-- run **localy** and **on your own host**
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+</div>
 
------------------------------------------------------------------
+# Run and deploy your AI Studio app
 
-#  how to run 🚀
-- There is more than one way to **run** it. 
+This contains everything you need to run your app locally.
 
+View your app in AI Studio: https://ai.studio/apps/drive/1N0pdh8q4A1GUezixKZnIP5dRuj1gfDjT
 
- --------------------------------------------------------------------
+## Run Locally
 
- 
-# first way 1️⃣
-- on you device **git https://github.com/new22000111-ux/aura-agent.git**
-- than upload it to **github**
-- go to **vercel** and clone your repository
-- than visit the **website**
+**Prerequisites:**  Node.js
 
 
-  ------------------------------------------------------------------
-
-  
-  # second way 2️⃣
-- **git https://github.com/new22000111-ux/aura-agent.git**
-- **cd aura-agent**
-- **npm install**
-- **npm start**
-- open your browser and go to **http://localhost:3000/**
-*🎉 Your Aura Agent is now running locally, fully functional and ready for testing.*
-
--------------------------------------------------------------
-  
-I am not responsible for what you do with this agent or what it causes you.
--
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`

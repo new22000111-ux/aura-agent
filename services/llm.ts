@@ -36,12 +36,17 @@ export class LLMService {
         }
     }
 
-    // Unified Generation Method
+    public getConfig(): LLMConfig {
+        return this.config;
+    }
+
+    // Unified Generation Method with Streaming Support
     public async generate(
         messages: any[], 
         tools: any[] = [], 
         systemInstruction?: string,
-        jsonMode: boolean = false
+        jsonMode: boolean = false,
+        onChunk?: (text: string) => void
     ): Promise<{ text: string; toolCalls?: any[] }> {
         
         const { provider, apiKey, baseUrl, modelId, temperature, topP, maxOutputTokens } = this.config;
@@ -50,70 +55,85 @@ export class LLMService {
         if (provider === 'gemini') {
             if (!this.geminiClient) throw new Error("Gemini API Key missing");
             
-            // Map messages to Gemini Content format
-            // Note: Aura uses a simplified history format, we need to ensure it matches Gemini SDK expectations
-            // This is a basic mapping. In AgentRuntime we actually store Gemini-compatible objects mostly.
-            // But let's be safe.
-            
             const reqConfig: any = {
                 temperature,
                 topP,
                 maxOutputTokens,
                 systemInstruction,
                 tools: tools.length > 0 ? [{ functionDeclarations: tools }] : undefined,
-                responseMimeType: jsonMode ? "application/json" : "text/plain"
             };
 
-            const response = await this.geminiClient.models.generateContent({
+            // REMOVED: forced thinkingBudget: 0. 
+            // We now rely on correct history management in AgentRuntime to handle thoughts.
+
+            // Only set responseMimeType if specifically JSON.
+            if (jsonMode) {
+                reqConfig.responseMimeType = "application/json";
+            }
+
+            // Use Streaming Interface
+            const responseStream = await this.geminiClient.models.generateContentStream({
                 model: modelId,
                 contents: messages,
                 config: reqConfig
             });
 
-            const cand = response.candidates?.[0];
-            const text = cand?.content?.parts?.filter((p: any) => p.text).map((p: any) => p.text).join('') || '';
-            const toolCalls = cand?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+            let fullText = "";
+            let toolCalls = [];
 
-            return { text, toolCalls };
+            for await (const chunk of responseStream) {
+                const text = chunk.text;
+                if (text) {
+                    fullText += text;
+                    if (onChunk) onChunk(text);
+                }
+                
+                // Collect tool calls if present (Gemini sends them usually in the final chunk or a specific chunk)
+                const calls = chunk.candidates?.[0]?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+                if (calls && calls.length > 0) {
+                    toolCalls.push(...calls);
+                }
+            }
+
+            return { text: fullText, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
         }
 
         // --- OPENAI / OPENROUTER / CUSTOM HANDLER ---
         if (provider === 'openai' || provider === 'openrouter' || provider === 'custom') {
             const endpoint = baseUrl || (provider === 'openrouter' ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1");
             
-            // Map Messages
             const openAiMessages = [
                 ...(systemInstruction ? [{ role: 'system', content: systemInstruction }] : []),
-                ...messages.map(m => {
-                    // Handle Tool Responses in History
+                ...messages.flatMap(m => {
                     if (Array.isArray(m.parts)) {
-                         // Check if it's a tool response
-                         const toolResp = m.parts.find((p: any) => p.functionResponse);
-                         if (toolResp) {
-                             return {
+                         const toolResponses = m.parts.filter((p: any) => p.functionResponse);
+                         if (toolResponses.length > 0) {
+                             return toolResponses.map((tr: any) => ({
                                  role: 'tool',
-                                 tool_call_id: toolResp.functionResponse.id,
-                                 content: JSON.stringify(toolResp.functionResponse.response)
-                             };
+                                 tool_call_id: tr.functionResponse.id,
+                                 content: JSON.stringify(tr.functionResponse.response)
+                             }));
                          }
-                         // Check if it's a tool call (Assistant side)
-                         const toolCall = m.parts.find((p: any) => p.functionCall);
-                         if (toolCall) {
-                             return {
+                         const textParts = m.parts.filter((p: any) => p.text).map((p:any) => p.text).join('');
+                         const toolCalls = m.parts.filter((p: any) => p.functionCall);
+                         
+                         if (toolCalls.length > 0) {
+                             return [{
                                  role: 'assistant',
-                                 tool_calls: [{
-                                     id: toolCall.functionCall.id || 'call_' + Math.random().toString(36).substr(2, 9),
+                                 content: textParts || null, 
+                                 tool_calls: toolCalls.map((tc: any) => ({
+                                     id: tc.functionCall.id || 'call_' + Math.random().toString(36).substr(2, 9),
                                      type: 'function',
                                      function: {
-                                         name: toolCall.functionCall.name,
-                                         arguments: JSON.stringify(toolCall.functionCall.args)
+                                         name: tc.functionCall.name,
+                                         arguments: JSON.stringify(tc.functionCall.args)
                                      }
-                                 }]
-                             };
+                                 }))
+                             }];
                          }
-                         return { role: m.role, content: m.parts[0].text || '' };
+                         return [{ role: m.role === 'model' ? 'assistant' : m.role, content: textParts }];
                     }
-                    return { role: m.role, content: m.text || '' };
+                    return [{ role: m.role === 'model' ? 'assistant' : m.role, content: m.text || '' }];
                 })
             ];
 
@@ -133,49 +153,82 @@ export class LLMService {
                     temperature,
                     top_p: topP,
                     max_tokens: maxOutputTokens,
-                    response_format: jsonMode ? { type: "json_object" } : undefined
+                    response_format: jsonMode ? { type: "json_object" } : undefined,
+                    stream: true // Enable Streaming
                 })
             });
 
             if (!res.ok) {
-                const err = await res.json();
+                const err = await res.json().catch(() => ({}));
                 throw new Error(err.error?.message || res.statusText);
             }
 
-            const data = await res.json();
-            const choice = data.choices[0];
-            const content = choice.message.content || '';
-            const tool_calls = choice.message.tool_calls;
+            // Stream Reader
+            const reader = res.body?.getReader();
+            const decoder = new TextDecoder();
+            let fullText = "";
+            let toolCallsMap: Record<number, any> = {};
 
-            let mappedToolCalls = undefined;
-            if (tool_calls) {
-                mappedToolCalls = tool_calls.map((tc: any) => ({
-                    id: tc.id,
-                    name: tc.function.name,
-                    args: JSON.parse(tc.function.arguments)
-                }));
+            if (reader) {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunkStr = decoder.decode(value);
+                    const lines = chunkStr.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6);
+                            if (dataStr === '[DONE]') continue;
+                            try {
+                                const data = JSON.parse(dataStr);
+                                const delta = data.choices[0].delta;
+                                
+                                // Text Content
+                                if (delta.content) {
+                                    fullText += delta.content;
+                                    if (onChunk) onChunk(delta.content);
+                                }
+                                
+                                // Tool Calls (Streaming Deltas)
+                                if (delta.tool_calls) {
+                                    for (const tc of delta.tool_calls) {
+                                        if (!toolCallsMap[tc.index]) {
+                                            toolCallsMap[tc.index] = { id: tc.id, name: tc.function.name, args: "" };
+                                        }
+                                        if (tc.function?.arguments) {
+                                            toolCallsMap[tc.index].args += tc.function.arguments;
+                                        }
+                                    }
+                                }
+                            } catch (e) { console.error('SSE Parse Error', e); }
+                        }
+                    }
+                }
             }
 
-            return { text: content, toolCalls: mappedToolCalls };
+            const toolCalls = Object.values(toolCallsMap).map((tc: any) => ({
+                id: tc.id,
+                name: tc.name,
+                args: JSON.parse(tc.args || '{}')
+            }));
+
+            return { text: fullText, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
         }
 
-        // --- ANTHROPIC HANDLER ---
+        // --- ANTHROPIC HANDLER (Legacy/Simpler) ---
         if (provider === 'anthropic') {
-             // Anthropic requires a different message structure (system is top level, user/assistant only in messages)
-             // Implementing basic text support for now, Tool use is complex to map strictly 1:1 in this snippet without a heavy adapter.
-             // We will fallback to "System Prompt" based autonomy if tools fail, or strict text.
-             // *Actually*, let's implement basic messages.
-             
              const endpoint = baseUrl || "https://api.anthropic.com/v1";
-             
-             // Filter system out of messages
              const anthropicMessages = messages.map(m => {
                  let role = m.role === 'model' ? 'assistant' : m.role;
                  let content = '';
-                 if (Array.isArray(m.parts)) content = m.parts.map((p: any) => p.text).join('');
-                 else content = m.text || '';
+                 if (Array.isArray(m.parts)) {
+                     content = m.parts.filter((p:any) => p.text).map((p: any) => p.text).join('');
+                 } else { content = m.text || ''; }
+                 if (!content) content = " "; 
                  return { role, content };
-             }).filter(m => m.role !== 'system'); // Remove system from array
+             }).filter(m => m.role !== 'system');
 
              const res = await fetch(`${endpoint}/messages`, {
                 method: 'POST',
@@ -183,7 +236,7 @@ export class LLMService {
                     'x-api-key': apiKey,
                     'anthropic-version': '2023-06-01',
                     'content-type': 'application/json',
-                    'dangerously-allow-browser': 'true' // Required for client-side fetch
+                    'dangerously-allow-browser': 'true'
                 },
                 body: JSON.stringify({
                     model: modelId,
@@ -194,12 +247,6 @@ export class LLMService {
                     top_p: topP,
                 })
             });
-             
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error?.message || res.statusText);
-            }
-            
             const data = await res.json();
             return { text: data.content[0].text };
         }

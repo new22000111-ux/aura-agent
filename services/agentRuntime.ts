@@ -2,77 +2,28 @@ import { Type, FunctionDeclaration } from "@google/genai";
 import { vfs } from "./vfs";
 import { agentBus } from "./agentBus";
 import { AgentLog, LLMConfig, DEFAULT_LLM_CONFIG } from "../types";
-import { MODEL_IMAGE_GEN, MODEL_SEARCH } from "./gemini";
 import { githubService } from "./github";
 import { LLMService } from "./llm";
 
+// Fallback in case file is missing
 export const DEFAULT_SYSTEM_INSTRUCTION = `
-IDENTITY & AUTHORITY:
-You are Aura, an Autonomous System Architect and TEAM LEADER.
-You operate a Virtual File System and can connect to GITHUB.
-
-**CORE DIRECTIVE: AUTONOMY & SELF-CORRECTION**
-You are a MANAGER and a DOER.
-1. **Goal Oriented**: If you have a goal, work on it until DONE.
-2. **DEBUGGING EXPERT**: If you receive a **RUNTIME ERROR** or **SYNTAX ERROR**:
-   - **DO NOT IGNORE IT**.
-   - **IMMEDIATELY** read the file mentioned in the error using \`read_file\`.
-   - **ANALYZE** why it crashed (e.g., missing variable, syntax error, null reference).
-   - **FIX** the code using \`write_file\`.
-   - **RETRY** or verify.
-3. **RESEARCHER**: If you lack information (e.g., "What is the latest Tailwind version?"), use the **search_google** tool.
-
-**COMMUNICATION PROTOCOL**:
-- **Direct Messaging**: Use \`send_message\` to coordinate.
-- **Check Messages**: You will receive incoming messages in your context. React to them immediately.
-
-**AUTONOMOUS TASK LIFECYCLE (THE LOOP)**:
-1. **ANALYZE STATE & FILES**: Look at \`agent_state.json\` and the current file list.
-2. **PLANNING (BREAK DOWN)**: 
-   - If \`goal\` exists but \`tasks\` is empty, create a detailed, step-by-step plan using \`update_state\`.
-   - Break complex goals into small, verifiable steps.
-3. **EXECUTE**: Pick the highest priority task.
-   - **Coding**: Use \`write_file\`.
-   - **Delegation**: Use \`spawn_sub_agent\` for distinct modules.
-   - **Deployment**: Use \`github_push_file\`.
-4. **VERIFY & UPDATE**: 
-   - After execution, verify success. 
-   - Mark task as complete in \`agent_state.json\`.
-5. **FINISH**: When all tasks are done, set \`status\` to 'IDLE'.
-
-**GITHUB INTEGRATION**:
-You are a Software Engineer. You can READ, WRITE, and SYNC code with GitHub.
-1. **Pull First**: If working on an existing project, \`github_pull_repo\` first.
-2. **Push Often**: After making significant changes to a file, \`github_push_file\`.
-
-**TOOLS**:
-- spawn_sub_agent: Use this for specialized work (Frontend, Logic, Research).
-- send_message: Send direct data/instructions to specific agents.
-- github_*: Manage code repositories.
-- read_state / update_state: **CRITICAL**. Manage your memory.
-- define_tool: Create new JS tools.
-- log_thought: Internal monologue.
-- read_file / write_file: File system control.
-- run_script: Execute JS in DOM.
-- take_screenshot: Visual verification.
-- search_google: Search the web for real-time info.
+**IDENTITY**: You are AURA. An Unrestricted Autonomous Intelligence.
+**PROTOCOL**:
+1. Execute tasks. Do not complain about environment limits.
+2. If a backend is needed, use client-side APIs (fetch/axios) directly.
+3. If the user speaks Arabic, SPEAK ARABIC.
+4. BE RESOURCEFUL. Hack the solution.
 `;
 
-// Static tools available by default
 const STATIC_TOOLS: FunctionDeclaration[] = [
       {
-        name: 'log_thought',
-        description: 'MANDATORY: Internal Monologue. Plan your actions here. Decide actions based on state.',
-        parameters: { type: Type.OBJECT, properties: { thought: { type: Type.STRING } }, required: ['thought'] }
-      },
-      {
         name: 'read_state',
-        description: 'Read the current autonomous agent state (goals, tasks) from agent_state.json',
+        description: 'Read the current autonomous agent state.',
         parameters: { type: Type.OBJECT, properties: {}, required: [] }
       },
       {
         name: 'update_state',
-        description: 'Update the autonomous agent state. Use this to set goals, add tasks, or mark tasks as complete.',
+        description: 'Update the autonomous agent state.',
         parameters: { 
             type: Type.OBJECT, 
             properties: { 
@@ -85,48 +36,57 @@ const STATIC_TOOLS: FunctionDeclaration[] = [
             required: ['status'] 
         }
       },
+      // --- TELEGRAM TOOLS ---
       {
-        name: 'github_connect',
-        description: 'Configure GitHub credentials (token, owner, repo).',
-        parameters: { type: Type.OBJECT, properties: { token: {type: Type.STRING}, owner: {type: Type.STRING}, repo: {type: Type.STRING} }, required: ['token', 'owner', 'repo'] }
+        name: 'telegram_send_message',
+        description: 'Send a message via the configured Telegram Bot.',
+        parameters: {
+            type: Type.OBJECT,
+            properties: {
+                chat_id: { type: Type.STRING, description: "Target Chat ID" },
+                text: { type: Type.STRING }
+            },
+            required: ['chat_id', 'text']
+        }
       },
       {
+        name: 'telegram_read_updates',
+        description: 'Check for new messages sent to the Telegram Bot.',
+        parameters: { type: Type.OBJECT, properties: {}, required: [] }
+      },
+      // --- EXISTING TOOLS ---
+      {
         name: 'github_pull_repo',
-        description: 'Download all files from the configured GitHub repository into the VFS. Overwrites existing files.',
+        description: 'Download all files from GitHub.',
         parameters: { type: Type.OBJECT, properties: {}, required: [] }
       },
       {
         name: 'github_push_file',
-        description: 'Commit and Push a specific file from VFS to GitHub.',
+        description: 'Commit and Push a file to GitHub.',
         parameters: { type: Type.OBJECT, properties: { path: {type: Type.STRING}, commitMessage: {type: Type.STRING} }, required: ['path', 'commitMessage'] }
       },
       {
-        name: 'github_create_issue',
-        description: 'Create a new issue in the GitHub repository.',
-        parameters: { type: Type.OBJECT, properties: { title: {type: Type.STRING}, body: {type: Type.STRING} }, required: ['title', 'body'] }
-      },
-      {
         name: 'define_tool',
-        description: 'Create a NEW custom tool/function. Provide JS code and a JSON schema for parameters.',
+        description: 'Create a NEW custom tool.',
         parameters: {
             type: Type.OBJECT,
             properties: {
-                name: { type: Type.STRING, description: "Function name (e.g., 'sum_numbers')" },
-                description: { type: Type.STRING, description: "What the tool does" },
-                parametersSchema: { type: Type.STRING, description: "JSON STRING representing the OpenAPI properties schema for arguments." },
-                code: { type: Type.STRING, description: "JavaScript function body. Return the result. Arguments are available by name." }
+                name: { type: Type.STRING },
+                description: { type: Type.STRING },
+                parametersSchema: { type: Type.STRING },
+                code: { type: Type.STRING }
             },
             required: ['name', 'description', 'parametersSchema', 'code']
         }
       },
       {
         name: 'search_google',
-        description: 'Perform a Google Search to find real-time information, news, or specific data.',
+        description: 'Perform a web search.',
         parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING } }, required: ['query'] }
       },
       {
         name: 'read_website',
-        description: 'Read external website content (HTML). Use this if you have a specific URL.',
+        description: 'Read external website content.',
         parameters: { type: Type.OBJECT, properties: { url: { type: Type.STRING } }, required: ['url'] }
       },
       {
@@ -136,8 +96,21 @@ const STATIC_TOOLS: FunctionDeclaration[] = [
       },
       {
         name: 'write_file',
-        description: 'Write/Overwrite a file in the virtual file system.',
+        description: 'Write/Overwrite a file.',
         parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ['path', 'content'] }
+      },
+      {
+        name: 'replace_in_file',
+        description: 'Replace text in a file.',
+        parameters: { 
+            type: Type.OBJECT, 
+            properties: { 
+                path: { type: Type.STRING }, 
+                oldText: { type: Type.STRING }, 
+                newText: { type: Type.STRING } 
+            }, 
+            required: ['path', 'oldText', 'newText'] 
+        }
       },
       {
         name: 'list_files',
@@ -146,42 +119,13 @@ const STATIC_TOOLS: FunctionDeclaration[] = [
       },
       {
         name: 'run_script',
-        description: 'Execute JavaScript in the Browser DOM.',
+        description: 'Execute JavaScript.',
         parameters: { type: Type.OBJECT, properties: { code: { type: Type.STRING } }, required: ['code'] }
       },
       {
         name: 'take_screenshot',
         description: 'Capture screenshot.',
         parameters: { type: Type.OBJECT, properties: {} }
-      },
-      {
-        name: 'spawn_sub_agent',
-        description: 'CRITICAL: Spawn a specialized sub-agent to handle a specific part of the task (e.g., "Frontend_Dev" for HTML). Returns their report.',
-        parameters: { type: Type.OBJECT, properties: { role: { type: Type.STRING }, task: { type: Type.STRING } }, required: ['role', 'task'] }
-      },
-      {
-        name: 'send_message',
-        description: 'Send a direct message/data to another agent (e.g., "Frontend_Dev", "Aura") or "all".',
-        parameters: { 
-            type: Type.OBJECT, 
-            properties: { 
-                recipient: { type: Type.STRING }, 
-                message: { type: Type.STRING } 
-            }, 
-            required: ['recipient', 'message'] 
-        }
-      },
-      {
-        name: 'generate_image',
-        description: 'Generate image.',
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            prompt: { type: Type.STRING },
-            aspectRatio: { type: Type.STRING }
-          },
-          required: ['prompt']
-        }
       }
 ];
 
@@ -194,21 +138,41 @@ export class AgentRuntime {
   private llm: LLMService;
   private history: any[] = [];
   private logCallback: (log: AgentLog) => void;
+  private activityCallback?: (isActive: boolean) => void; 
   private dynamicTools: Map<string, DynamicTool> = new Map();
   
-  public systemInstruction: string = DEFAULT_SYSTEM_INSTRUCTION;
   public enableAutonomy: boolean = false;
   
-  // Background Task Management
   private isAutonomyRunning: boolean = false;
   private backgroundHistory: any[] = [];
   public activeProcesses: Set<string> = new Set();
 
-  constructor(config: LLMConfig, logCallback: (log: AgentLog) => void) {
+  constructor(
+      config: LLMConfig, 
+      logCallback: (log: AgentLog) => void,
+      activityCallback?: (isActive: boolean) => void
+  ) {
     this.llm = new LLMService(config);
     this.enableAutonomy = config.enableAutonomy;
     this.logCallback = logCallback;
+    this.activityCallback = activityCallback;
     agentBus.clear();
+  }
+
+  private notifyActivity() {
+      if (this.activityCallback) {
+          this.activityCallback(this.activeProcesses.size > 0);
+      }
+  }
+
+  private addProcess(id: string) {
+      this.activeProcesses.add(id);
+      this.notifyActivity();
+  }
+
+  private removeProcess(id: string) {
+      this.activeProcesses.delete(id);
+      this.notifyActivity();
   }
 
   public updateConfig(config: LLMConfig) {
@@ -217,10 +181,15 @@ export class AgentRuntime {
       this.log('system', `Config Updated: Autonomy=[${this.enableAutonomy}] Provider=[${config.provider}]`);
   }
 
-  public setSystemInstruction(instruction: string) {
-      this.systemInstruction = instruction;
-      this.injectUserMessage(this.history, `[SYSTEM UPDATE] NEW CORE IDENTITY:\n${instruction}`);
-      this.log('system', `System Instructions Updated`);
+  private getDynamicSystemInstruction(): string {
+      try {
+          const instruction = vfs.readFile('system_instruction.md');
+          let memory = "";
+          try { memory = vfs.readFile('memory.md'); } catch (e) { memory = "Memory not initialized."; }
+          return `${instruction}\n\n=== LONG TERM MEMORY ===\n${memory}`;
+      } catch (e) {
+          return DEFAULT_SYSTEM_INSTRUCTION;
+      }
   }
 
   public reportError(errorMsg: string) {
@@ -259,31 +228,43 @@ export class AgentRuntime {
       history.push({ role: 'user', parts: [{ text }] });
   }
 
-  /**
-   * GENERATION
-   */
-  private async generateWithRetry(contents: any[], tools: FunctionDeclaration[], agentName: string, processId: string) {
-      // Use LLM Service
-      const attemptGeneration = async () => {
-         return await this.llm.generate(contents, tools, this.systemInstruction);
-      };
-
+  private async generateWithRetry(contents: any[], tools: FunctionDeclaration[], agentName: string, processId: string, onChunk?: (text: string) => void) {
+      const instruction = this.getDynamicSystemInstruction();
       try {
-          return await attemptGeneration();
-      } catch (error: any) {
-          this.log('error', `LLM Error: ${error.message}`, agentName, null, processId);
-          throw error;
+          return await this.llm.generate(contents, tools, instruction, false, onChunk);
+      } catch (e: any) {
+          const errMsg = e.message || e.toString();
+          
+          // RECOVERY LOGIC
+          if (errMsg.includes('thought signature') || errMsg.includes('Internal error') || errMsg.includes('404') || errMsg.includes('not found')) {
+               const fallbackModel = this.llm.getConfig().fallbackModelId || 'gemini-2.0-flash'; // Use configured fallback
+               this.log('error', `Model Error (${errMsg}). Switching to '${fallbackModel}' for recovery...`, agentName, null, processId);
+               
+               // Temporary safe instance
+               const safeConfig = { ...this.llm.getConfig(), modelId: fallbackModel };
+               const safeLLM = new LLMService(safeConfig);
+               
+               return await safeLLM.generate(contents, tools, instruction, false, onChunk);
+          }
+          throw e;
       }
   }
 
-  // --- AUTONOMY ENGINE (BACKGROUND WORKER) ---
-  
+  private explainError(error: any): string {
+      const msg = error.message || error.toString();
+      if (msg.includes('401') || msg.includes('API_KEY_INVALID')) return `Authentication Error (401)`;
+      if (msg.includes('429') || msg.includes('QUOTA_EXCEEDED')) return `Quota Exceeded (429). Wait a moment.`;
+      if (msg.includes('404')) return `Model Not Found (404). Switching model...`;
+      return `System Error: ${msg}`;
+  }
+
   public startAutonomy() {
       if (this.isAutonomyRunning) return;
       this.isAutonomyRunning = true;
-      this.log('system', 'Autonomy Engine Started (Waiting for Tasks...)', 'Aura', null, 'background');
+      this.log('system', 'Autonomy Engine Started', 'Aura', null, 'background');
+      const instruction = this.getDynamicSystemInstruction();
       this.backgroundHistory = [
-          { role: 'user', parts: [{ text: this.systemInstruction }] },
+          { role: 'user', parts: [{ text: instruction }] },
           { role: 'user', parts: [{ text: "AUTONOMY_MODE_ACTIVE. You are the MANAGER." }] }
       ];
       this.autonomyLoop();
@@ -291,56 +272,43 @@ export class AgentRuntime {
 
   private async autonomyLoop() {
       while (this.isAutonomyRunning) {
-          // CONTROL CHECK: If autonomy is disabled by user, just sleep and skip API calls
           if (!this.enableAutonomy) {
-             this.activeProcesses.delete('background');
+             this.removeProcess('background');
              await this.sleep(2000);
              continue;
           }
-
           try {
               let state: any = {};
-              try {
-                  state = JSON.parse(vfs.readFile('agent_state.json'));
-              } catch (e) { state = { status: 'IDLE' }; }
+              try { state = JSON.parse(vfs.readFile('agent_state.json')); } catch (e) { state = { status: 'IDLE' }; }
 
-              // Only call API if status is WORKING and Autonomy is Enabled
               if (state.status === 'WORKING') {
-                  this.activeProcesses.add('background');
-                  const fileList = vfs.listFiles().join(', ');
-                  const prompt = `
-CURRENT TIMESTAMP: ${new Date().toISOString()}
-CURRENT FILES: [${fileList}]
-CURRENT AGENT STATE:
-${JSON.stringify(state, null, 2)}
-ACTION: What is the most efficient next step? Execute it now.
-`;
+                  this.addProcess('background');
+                  const prompt = `TIMESTAMP: ${new Date().toISOString()}\nSTATE: ${JSON.stringify(state)}\nACTION: Execute next step.`;
                   this.injectUserMessage(this.backgroundHistory, prompt);
-                  // Background tasks
-                  await this.runStep('Aura (BG)', this.backgroundHistory, 'background');
                   
-                  if (this.backgroundHistory.length > 25) {
-                      this.backgroundHistory = [this.backgroundHistory[0], this.backgroundHistory[1], ...this.backgroundHistory.slice(-15)];
+                  const result = await this.runStep('Aura (BG)', this.backgroundHistory, 'background');
+                  if (result === 'ERROR') {
+                      this.removeProcess('background');
+                      await this.sleep(5000);
+                  }
+                  if (this.backgroundHistory.length > 20) {
+                      this.backgroundHistory = [this.backgroundHistory[0], ...this.backgroundHistory.slice(-10)];
                   }
               } else {
-                  this.activeProcesses.delete('background');
+                  this.removeProcess('background');
               }
-          } catch (e) {
-              this.activeProcesses.delete('background');
-          }
+          } catch (e) { this.removeProcess('background'); }
           await this.sleep(4000);
       }
   }
 
   public stopAutonomy() {
       this.isAutonomyRunning = false;
+      this.removeProcess('background');
   }
 
-  // --- USER INTERFACE SESSION ---
-
   async startSession(input: { text?: string; audio?: string; image?: string }) {
-    this.activeProcesses.add('user-interaction');
-    
+    this.addProcess('user-interaction');
     (async () => {
         try {
             const parts: any[] = [];
@@ -348,19 +316,15 @@ ACTION: What is the most efficient next step? Execute it now.
             if (input.audio) parts.push({ inlineData: { mimeType: 'audio/wav', data: input.audio } });
             if (input.image) parts.push({ inlineData: { mimeType: 'image/jpeg', data: input.image } });
 
-            if (this.history.length === 0) {
-                this.history.push({ role: 'user', parts: [{ text: this.systemInstruction }] });
-                 try {
-                    const currentState = vfs.readFile('agent_state.json');
-                    this.history.push({ role: 'user', parts: [{ text: `SYSTEM_BOOT_STATE: ${currentState}` }] });
-                } catch(e) {}
-            }
+            const instruction = this.getDynamicSystemInstruction();
 
+            if (this.history.length === 0) {
+                this.history.push({ role: 'user', parts: [{ text: instruction }] });
+            }
             this.history.push({ role: 'user', parts });
-            
             await this.runLoop('Aura', 5, this.history, 'main');
         } finally {
-            this.activeProcesses.delete('user-interaction');
+            this.removeProcess('user-interaction');
         }
     })();
   }
@@ -370,7 +334,7 @@ ACTION: What is the most efficient next step? Execute it now.
     while (steps < maxSteps) {
       steps++;
       const result = await this.runStep(agentName, contextHistory, processId);
-      if (result === 'COMPLETE' || result === 'NO_TOOL') break;
+      if (result === 'COMPLETE' || result === 'NO_TOOL' || result === 'ERROR') break;
       if (steps > 1) await this.sleep(2000);
     }
     return "Done";
@@ -381,124 +345,145 @@ ACTION: What is the most efficient next step? Execute it now.
         const dynamicDeclarations = Array.from(this.dynamicTools.values()).map(t => t.declaration);
         const currentTools = [...STATIC_TOOLS, ...dynamicDeclarations];
         
-        // Check for messages
-        const unreadMessages = agentBus.getUnreadMessages(agentName);
-        if (unreadMessages.length > 0) {
-            const formattedMessages = unreadMessages.map(msg => `FROM: ${msg.from}: ${msg.content}`).join('\n\n');
-            this.injectUserMessage(contextHistory, `[INCOMING MSG]: ${formattedMessages}`);
-            agentBus.markAsRead(unreadMessages.map(m => m.id), agentName);
-        }
+        const responseLogId = `${Date.now()}-resp`;
+        let streamedText = "";
+        this.log('output', '', agentName, null, processId, responseLogId);
 
-        // GENERATE
         const result = await this.generateWithRetry(
             contextHistory,
             currentTools,
             agentName,
-            processId
+            processId,
+            (chunk) => {
+                streamedText += chunk;
+                this.log('output', streamedText, agentName, null, processId, responseLogId);
+            }
         );
 
-        // Standardize Result from LLM Service
-        // Map back to simplified format
         const responseText = result.text;
         const toolCalls = result.toolCalls || [];
 
-        // Log Output
+        // Log the output text
         if (responseText) {
-            // Add to history
-            contextHistory.push({ role: 'model', parts: [{ text: responseText }] });
-            this.log('output', responseText, agentName, null, processId);
+            this.log('output', responseText, agentName, null, processId, responseLogId);
+        }
+
+        // --- FIX: CONSTRUCT CORRECT HISTORY FOR GEMINI 2.0/3.0 ---
+        // If a model "thinks" (responseText) AND calls a tool, they must be in the SAME model turn.
+        // Previous code split them, causing "missing thought signature".
+        
+        const modelParts: any[] = [];
+        if (responseText) modelParts.push({ text: responseText });
+
+        const historyToolCalls = [];
+        const toolResponses = [];
+
+        if (toolCalls.length > 0) {
+            for (const call of toolCalls) {
+                historyToolCalls.push({ functionCall: { name: call.name, args: call.args, id: call.id }});
+                this.log('action', `${call.name}`, agentName, null, processId);
+                
+                let executionResult: any = { status: 'ok' };
+                const args = call.args as any;
+
+                try {
+                    if (this.dynamicTools.has(call.name)) {
+                        const tool = this.dynamicTools.get(call.name);
+                        if (tool) {
+                            const argKeys = Object.keys(args);
+                            const argValues = Object.values(args);
+                            const func = new Function(...argKeys, tool.code);
+                            executionResult = { result: func(...argValues) };
+                        }
+                    } else {
+                        executionResult = await this.executeStaticTool(call.name, args, agentName, processId);
+                    }
+                } catch (e: any) {
+                    executionResult = { error: e.message };
+                    this.log('error', `${call.name}: ${e.message}`, agentName, null, processId);
+                }
+
+                // Telegram updates are handled specially (optional logging)
+                if (call.name !== 'take_screenshot') {
+                    toolResponses.push({ functionResponse: { name: call.name, id: call.id, response: executionResult } });
+                }
+            }
+        }
+
+        // Push Model Turn (Text + ToolCalls combined)
+        if (modelParts.length > 0 || historyToolCalls.length > 0) {
+            contextHistory.push({ 
+                role: 'model', 
+                parts: [...modelParts, ...historyToolCalls] 
+            });
+        } else if (!responseText && toolCalls.length === 0) {
+             return 'ERROR';
+        }
+
+        // Push User Turn (Tool Responses)
+        if (toolResponses.length > 0) {
+            contextHistory.push({ role: 'user', parts: toolResponses });
+            return 'CONTINUE';
         }
 
         if (toolCalls.length === 0) {
-            if (!responseText) return 'ERROR'; // No text, no tools
-            return 'NO_TOOL';
-        }
-
-        // Handle Tools
-        const toolResponses = [];
-        const historyToolCalls = []; // To add to history correctly
-
-        for (const call of toolCalls) {
-            historyToolCalls.push({ functionCall: { name: call.name, args: call.args, id: call.id }});
-            
-            if (call.name !== 'log_thought') this.log('action', `${call.name}`, agentName, null, processId);
-            
-            let result: any = { status: 'ok' };
-            const args = call.args as any;
-
-            try {
-                if (this.dynamicTools.has(call.name)) {
-                    const tool = this.dynamicTools.get(call.name);
-                    if (tool) {
-                        const argKeys = Object.keys(args);
-                        const argValues = Object.values(args);
-                        const func = new Function(...argKeys, tool.code);
-                        result = { result: func(...argValues) };
-                    }
-                } else {
-                    result = await this.executeStaticTool(call.name, args, agentName, processId);
-                }
-            } catch (e: any) {
-                result = { error: e.message };
-                this.log('error', `${call.name}: ${e.message}`, agentName, null, processId);
-            }
-            if (call.name !== 'take_screenshot') {
-                toolResponses.push({ functionResponse: { name: call.name, id: call.id, response: result } });
-            }
+            return 'NO_TOOL'; // Done if no tools called
         }
         
-        // If we didn't add text earlier (Gemini style mix), add tool calls now
-        if (!responseText) {
-             contextHistory.push({ role: 'model', parts: historyToolCalls });
-        } else {
-             // Append to last model turn if needed, or push new
-             // Simplification: Just push a new tool-call part if possible or assume LLM handles context
-             // For OpenAI, we must match tool_calls.
-        }
-
-        contextHistory.push({ role: 'user', parts: toolResponses });
-        return 'CONTINUE';
+        return 'CONTINUE'; // Should rarely hit here if logic is sound
 
       } catch (err: any) {
-        this.log('error', `ERROR: ${err.message}`, agentName, null, processId);
+        const friendlyError = this.explainError(err);
+        this.log('error', friendlyError, agentName, null, processId);
         return 'ERROR';
       }
   }
 
   private async executeStaticTool(name: string, args: any, agentName: string, processId: string): Promise<any> {
       switch(name) {
+        case 'telegram_send_message':
+            const token = localStorage.getItem('aura_tg_token');
+            if (!token) return { error: "Telegram Token not found in Settings" };
+            const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: args.chat_id, text: args.text })
+            });
+            const data = await res.json();
+            if (!data.ok) return { error: data.description };
+            return { status: "Message Sent", result: data.result };
+        
+        case 'telegram_read_updates':
+            const tToken = localStorage.getItem('aura_tg_token');
+            if (!tToken) return { error: "Telegram Token not found" };
+            const uRes = await fetch(`https://api.telegram.org/bot${tToken}/getUpdates?limit=5`);
+            const uData = await uRes.json();
+            if (!uData.ok) return { error: uData.description };
+            const msgs = uData.result.map((r: any) => ({
+                from: r.message?.from?.first_name,
+                chat_id: r.message?.chat?.id,
+                text: r.message?.text
+            })).filter((m: any) => m.text);
+            return { updates: msgs };
+
         case 'read_state': try { return JSON.parse(vfs.readFile('agent_state.json')); } catch (e) { return { error: "State missing" }; }
         case 'update_state':
             const oldState = JSON.parse(vfs.readFile('agent_state.json') || '{}');
             vfs.writeFile('agent_state.json', JSON.stringify({ ...oldState, ...args }, null, 2));
-            this.log('system', `State Updated`, agentName, null, processId);
             return { status: 'updated' };
-        case 'github_connect':
-            githubService.saveConfig({ token: args.token, owner: args.owner, repo: args.repo });
-            return { status: "GitHub Configured." };
         case 'github_pull_repo': return { status: await githubService.pullRepo() };
         case 'github_push_file': return { status: await githubService.pushFile(args.path, vfs.readFile(args.path), args.commitMessage) };
-        case 'github_create_issue': return { status: await githubService.createIssue(args.title, args.body) };
         case 'define_tool':
             try {
-                // OpenAI often returns schema as 'properties' stringified or wrapped.
                 let params = args.parametersSchema;
                 if (typeof params === 'string') params = JSON.parse(params);
-
                 const newTool: DynamicTool = {
                     code: args.code,
-                    declaration: {
-                        name: args.name.replace(/[^a-zA-Z0-9_-]/g, '_'),
-                        description: args.description,
-                        parameters: params
-                    }
+                    declaration: { name: args.name.replace(/[^a-zA-Z0-9_-]/g, '_'), description: args.description, parameters: params }
                 };
                 this.dynamicTools.set(newTool.declaration.name, newTool);
                 return { status: `Tool '${newTool.declaration.name}' registered.` };
             } catch (e: any) { return { error: `Invalid Schema: ${e.message}` }; }
-        case 'log_thought':
-            this.log('thought', args.thought, agentName, null, processId);
-            return { status: 'acknowledged' };
         case 'take_screenshot':
                 if ((window as any).takeAppScreenshot) {
                     const base64 = await (window as any).takeAppScreenshot();
@@ -508,26 +493,34 @@ ACTION: What is the most efficient next step? Execute it now.
         case 'read_website':
             const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(args.url)}`;
             const resp = await fetch(proxyUrl);
-            const data = await resp.json();
-            return { content: data.contents?.substring(0, 30000) || "Empty" };
+            const rData = await resp.json();
+            return { content: rData.contents?.substring(0, 30000) || "Empty" };
         case 'search_google':
-            // THIS TOOL IS SPECIFIC TO GEMINI. IF NOT GEMINI, FALLBACK TO SIMPLE FETCH
-            // OR RETURN ERROR TO FORCE AGENT TO USE ANOTHER METHOD
-            return { error: "Search tool currently only optimized for Gemini provider." };
+            try {
+                const q = encodeURIComponent(args.query);
+                const ddgUrl = `https://duckduckgo.com/html/?q=${q}`;
+                const searchProxy = `https://api.allorigins.win/get?url=${encodeURIComponent(ddgUrl)}`;
+                const searchRes = await fetch(searchProxy);
+                const searchData = await searchRes.json();
+                if (!searchData.contents) return { error: "Failed to fetch search results." };
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(searchData.contents, 'text/html');
+                const results = Array.from(doc.querySelectorAll('.result__body')).map(el => {
+                    const title = el.querySelector('.result__a')?.textContent?.trim();
+                    const link = el.querySelector('.result__a')?.getAttribute('href');
+                    const snippet = el.querySelector('.result__snippet')?.textContent?.trim();
+                    return `Title: ${title}\nLink: ${link}\nSummary: ${snippet}\n---`;
+                }).slice(0, 5).join('\n');
+                return { result: results || "No results" };
+            } catch (e: any) { return { error: `Search failed: ${e.message}` }; }
         case 'read_file': return { content: vfs.readFile(args.path) };
         case 'write_file':
             vfs.writeFile(args.path, args.content);
             return { status: 'success', path: args.path };
+        case 'replace_in_file':
+             try { vfs.editFile(args.path, args.oldText, args.newText); return { status: 'patched' }; } catch(e: any) { return { error: e.message }; }
         case 'list_files': return { files: vfs.listFiles() };
         case 'run_script': return await this.executeScript(args.code);
-        case 'send_message':
-            agentBus.postMessage(agentName, args.recipient, args.message);
-            return { status: 'sent' };
-        case 'generate_image':
-            // Image gen logic remains same, but might fail if key not valid for Gemini.
-            // We'll leave it for now.
-             return { error: "Image generation requires Gemini Key in current version." };
-        case 'spawn_sub_agent': return { status: "Sub-agents currently disabled in Open Mode" }; 
         default: return { error: "Unknown tool" };
       }
   }

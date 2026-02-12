@@ -56,6 +56,7 @@ export interface LLMConfig {
     apiKey: string;
     baseUrl?: string; // For Custom/Ollama/OpenRouter
     modelId: string;
+    fallbackModelId: string; // NEW: Configurable fallback model
     enableAutonomy: boolean; // NEW: Control background loop
     // Advanced Hyperparameters
     temperature: number;
@@ -67,8 +68,9 @@ export interface LLMConfig {
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
     provider: 'gemini',
     apiKey: '', // User must provide
-    modelId: 'gemini-2.0-flash-lite',
-    enableAutonomy: false, // Default to FALSE to save rate limits
+    modelId: 'gemini-3-flash-preview', 
+    fallbackModelId: 'gemini-2.0-flash', // UPDATED: Default fallback per user request
+    enableAutonomy: false, 
     temperature: 0.7,
     topP: 0.95,
     maxOutputTokens: 8192
