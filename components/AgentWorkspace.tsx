@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Play, Mic, Eye, Activity, BrainCircuit, Menu, Folder, MessageSquare, Settings as SettingsIcon, Save, Volume2, VolumeX, Github, X, Server, Shield, Sliders, AlertTriangle, Terminal, ChevronUp, ChevronDown, Zap, Copy, Check } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Play, Mic, Eye, Activity, BrainCircuit, Menu, Folder, MessageSquare, Settings as SettingsIcon, Save, Volume2, VolumeX, Github, X, Server, Shield, Sliders, AlertTriangle, Terminal, ChevronUp, ChevronDown, Zap, Copy, Check, Cpu, Radio } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { vfs } from '../services/vfs';
@@ -22,6 +22,52 @@ const LLM_PROVIDERS: {id: LLMProvider, name: string}[] = [
     { id: 'openrouter', name: 'OpenRouter' },
     { id: 'custom', name: 'Custom (Ollama/Compatible)' }
 ];
+
+// --- SOUND EFFECTS ENGINE ---
+const useSoundEffects = () => {
+    const ctxRef = useRef<AudioContext | null>(null);
+
+    const playSound = useCallback((type: 'click' | 'success' | 'alert') => {
+        try {
+            if (!ctxRef.current) {
+                ctxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+            }
+            const ctx = ctxRef.current;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            if (type === 'click') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(300, ctx.currentTime + 0.05);
+                gain.gain.setValueAtTime(0.05, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.05);
+            } else if (type === 'success') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(440, ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(880, ctx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.05, ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.2);
+            } else if (type === 'alert') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, ctx.currentTime);
+                gain.gain.setValueAtTime(0.05, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.1);
+            }
+        } catch (e) { /* Ignore audio policy errors until interaction */ }
+    }, []);
+
+    return { playSound };
+};
 
 // --- HELPER COMPONENTS ---
 
@@ -68,6 +114,7 @@ export const AgentWorkspace: React.FC = () => {
   // UI Status State
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [showConsole, setShowConsole] = useState(false); 
+  const { playSound } = useSoundEffects();
 
   // Configuration State
   const [config, setConfig] = useState<LLMConfig>(DEFAULT_LLM_CONFIG);
@@ -79,7 +126,6 @@ export const AgentWorkspace: React.FC = () => {
   const [showGithubModal, setShowGithubModal] = useState(false);
   const [ghConfig, setGhConfig] = useState({ token: '', owner: '', repo: '' });
   const [ghConnected, setGhConnected] = useState(false);
-  const [previewTab, setPreviewTab] = useState<'code' | 'preview'>('preview');
 
   // Refs
   const runtimeRef = useRef<AgentRuntime | null>(null);
@@ -101,7 +147,6 @@ export const AgentWorkspace: React.FC = () => {
     let initialConfig = DEFAULT_LLM_CONFIG;
     if (savedConfigStr) {
         initialConfig = JSON.parse(savedConfigStr);
-        // Migration: Ensure fallbackModelId exists for old configs
         if (!initialConfig.fallbackModelId) {
             initialConfig.fallbackModelId = 'gemini-2.0-flash';
         }
@@ -136,9 +181,13 @@ export const AgentWorkspace: React.FC = () => {
                     newLogs[index] = log;
                     return newLogs;
                 }
+                if (log.type === 'error') playSound('alert');
                 return [...prev, log];
             });
-            if (log.type === 'action') refreshFiles();
+            if (log.type === 'action') {
+                refreshFiles();
+                playSound('success');
+            }
         },
         (isActive) => setIsAgentBusy(isActive)
     );
@@ -209,8 +258,8 @@ export const AgentWorkspace: React.FC = () => {
                     <script src="https://unpkg.com/lucide@latest"></script>
                     <style>
                         body { background-color: #000; color: white; }
-                        ::-webkit-scrollbar { width: 6px; }
-                        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+                        ::-webkit-scrollbar { width: 4px; }
+                        ::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
                     </style>
                 </head>
                 <body>
@@ -255,6 +304,8 @@ export const AgentWorkspace: React.FC = () => {
   const handleInput = async (input: { text?: string; audio?: string }) => {
     if (!input.text && !input.audio) return;
     if (input.text) setPrompt('');
+    
+    playSound('click');
 
     setLogs(prev => [...prev, {
         id: Date.now().toString(),
@@ -269,6 +320,7 @@ export const AgentWorkspace: React.FC = () => {
   };
 
   const toggleRecording = async () => {
+    playSound('click');
     if (isRecording) {
         mediaRecorderRef.current?.stop();
         setIsRecording(false);
@@ -342,101 +394,112 @@ export const AgentWorkspace: React.FC = () => {
       );
   };
 
-  const saveGithubConfig = async () => {
-    githubService.saveConfig(ghConfig);
-    try {
-        await githubService.validateUser();
-        setGhConnected(true);
-        setShowGithubModal(false);
-    } catch(e) { alert("GitHub Connection Failed"); }
-  };
+  const handleNavClick = (view: ViewMode) => {
+      playSound('click');
+      setActiveView(view);
+      setIsMenuOpen(false);
+  }
 
   const mainLogs = logs.filter(l => l.processId !== 'background');
   const consoleLogs = logs.filter(l => l.processId === 'background');
 
   return (
-    <div ref={workspaceRef} className="flex flex-col h-full w-full bg-black text-zinc-100 font-sans relative">
+    <div ref={workspaceRef} className="flex flex-col h-full w-full bg-black text-zinc-100 font-sans overflow-hidden">
        <style>{`
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0; } 100% { opacity: 1; } }
         .markdown-body { font-size: 14px; }
        `}</style>
       
-      {/* HEADER */}
-      <div className="flex-none h-14 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4 z-50">
+      {/* HEADER - Updated for Safety Areas and Z-Index */}
+      <div className="flex-none h-14 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between px-4 z-50 pt-safe select-none">
           <div className="flex items-center gap-4">
               <div className="relative">
-                  <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2 hover:bg-zinc-800 rounded-md text-zinc-400">
+                  <button onClick={() => { playSound('click'); setIsMenuOpen(!isMenuOpen); }} className="p-2 hover:bg-zinc-800 rounded-md text-zinc-400">
                       <Menu size={20} />
                   </button>
                   {isMenuOpen && (
                       <div className="absolute top-12 left-0 w-56 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl py-1 z-50 flex flex-col">
-                          <button onClick={() => { setActiveView('chat'); setIsMenuOpen(false); }} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='chat'?'text-white':'text-zinc-400'}`}><MessageSquare size={16}/> Chat</button>
-                          <button onClick={() => { setActiveView('telegram'); setIsMenuOpen(false); }} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='telegram'?'text-white':'text-zinc-400'}`}><Terminal size={16}/> Telegram Uplink</button>
-                          <button onClick={() => { setActiveView('files'); setIsMenuOpen(false); }} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='files'?'text-white':'text-zinc-400'}`}><Folder size={16}/> Files</button>
-                          <button onClick={() => { setActiveView('preview'); setIsMenuOpen(false); }} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='preview'?'text-white':'text-zinc-400'}`}><Eye size={16}/> Preview</button>
+                          <button onClick={() => handleNavClick('chat')} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='chat'?'text-white':'text-zinc-400'}`}><MessageSquare size={16}/> Chat</button>
+                          <button onClick={() => handleNavClick('telegram')} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='telegram'?'text-white':'text-zinc-400'}`}><Terminal size={16}/> Telegram Uplink</button>
+                          <button onClick={() => handleNavClick('files')} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='files'?'text-white':'text-zinc-400'}`}><Folder size={16}/> Files</button>
+                          <button onClick={() => handleNavClick('preview')} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='preview'?'text-white':'text-zinc-400'}`}><Eye size={16}/> Preview</button>
                           <div className="h-px bg-zinc-800 my-1"></div>
-                          <button onClick={() => { setActiveView('settings'); setIsMenuOpen(false); }} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='settings'?'text-white':'text-zinc-400'}`}><SettingsIcon size={16}/> Settings</button>
+                          <button onClick={() => handleNavClick('settings')} className={`px-4 py-3 text-sm text-left flex gap-3 hover:bg-zinc-800 ${activeView==='settings'?'text-white':'text-zinc-400'}`}><SettingsIcon size={16}/> Settings</button>
                       </div>
                   )}
               </div>
               
               <div className="flex items-center gap-2">
                 <span className="font-bold tracking-wide text-zinc-200">AURA</span>
-                {isAgentBusy && (
-                    <div className="flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30">
-                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>
-                        <span className="text-[10px] text-indigo-300 font-bold uppercase tracking-wide">Processing</span>
+                {/* System Status Indicators */}
+                <div className="hidden md:flex items-center gap-3 ml-4">
+                    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800">
+                        <Cpu size={10} className={isAgentBusy ? 'text-indigo-400' : 'text-zinc-600'} />
+                        <span className="text-[10px] font-mono text-zinc-500">{isAgentBusy ? 'BUSY' : 'IDLE'}</span>
                     </div>
-                )}
+                    {config.enableAutonomy && (
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800">
+                            <Activity size={10} className="text-emerald-500 animate-pulse" />
+                            <span className="text-[10px] font-mono text-zinc-500">AUTO</span>
+                        </div>
+                    )}
+                </div>
               </div>
           </div>
           <div className="flex gap-2">
              <button onClick={() => setShowConsole(!showConsole)} className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-mono border ${showConsole ? 'bg-zinc-800 text-white border-zinc-700' : 'bg-transparent text-zinc-500 border-transparent hover:bg-zinc-800'}`}>
-                 <Terminal size={14}/> {consoleLogs.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>}
+                 <Terminal size={14}/> {consoleLogs.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 block"></span>}
              </button>
              <button onClick={() => setShowGithubModal(true)} className={`p-2 rounded-full ${ghConnected ? 'text-emerald-500 bg-emerald-950/30' : 'text-zinc-600'}`}><Github size={16}/></button>
           </div>
       </div>
 
-      {/* CONTENT */}
-      <div className="flex-1 overflow-hidden relative flex flex-col">
+      {/* MAIN CONTENT AREA - Flex 1 to fill available space */}
+      <div className="flex-1 flex flex-col relative overflow-hidden">
           
-          <div className="flex-1 relative overflow-hidden">
-            {/* CHAT */}
+          <div className="flex-1 relative flex flex-col overflow-hidden">
+            {/* CHAT VIEW */}
             {activeView === 'chat' && (
-                <div className="absolute inset-0 flex flex-col bg-black">
+                <div className="flex-1 flex flex-col h-full bg-black">
                     <div className="flex-1 overflow-y-auto p-4 space-y-6">
                         {mainLogs.map((log, idx) => (
-                            <div key={log.id} className={`flex flex-col space-y-1 ${log.agentName === 'User' ? 'items-end' : 'items-start'}`}>
-                                <div className={`max-w-[90%] ${log.agentName === 'User' ? 'bg-zinc-900 px-4 py-2 rounded-xl text-white' : 'w-full pl-0'}`}>
+                            <div key={log.id} className={`flex flex-col space-y-1 ${log.agentName === 'User' ? 'items-end' : 'items-start'} animate-fade-in`}>
+                                <div className={`max-w-[90%] md:max-w-[80%] ${log.agentName === 'User' ? 'bg-zinc-900 px-4 py-2 rounded-xl text-white' : 'w-full pl-0'}`}>
                                     {renderLogContent(log, idx === mainLogs.length - 1)}
                                 </div>
                             </div>
                         ))}
-                        <div ref={logsEndRef} />
+                        <div ref={logsEndRef} className="h-4"/>
                     </div>
-                    {/* INPUT AREA */}
-                    <div className="p-4 bg-black border-t border-zinc-900">
-                        <div className="relative flex items-center gap-2">
-                            <button onClick={toggleRecording} className={`p-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-900 text-zinc-500'}`}><Mic size={20}/></button>
-                            <input type="text" value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleInput({text: prompt})} className="w-full bg-zinc-900 border-none rounded-full py-3 px-5 text-sm text-white focus:ring-1 focus:ring-indigo-500" placeholder="Type a message..." />
-                            <button onClick={() => handleInput({text: prompt})} className="absolute right-2 p-2 bg-indigo-600 rounded-full text-white"><Play size={14}/></button>
+                    {/* INPUT AREA - Safe Area Aware */}
+                    <div className="flex-none p-4 bg-black border-t border-zinc-900 pb-safe">
+                        <div className="relative flex items-center gap-2 max-w-4xl mx-auto">
+                            <button onClick={toggleRecording} className={`p-3 rounded-full transition-all ${isRecording ? 'bg-red-500 animate-pulse text-white' : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800'}`}><Mic size={20}/></button>
+                            <input 
+                                type="text" 
+                                value={prompt} 
+                                onChange={(e) => setPrompt(e.target.value)} 
+                                onKeyDown={(e) => e.key === 'Enter' && handleInput({text: prompt})} 
+                                className="w-full bg-zinc-900 border-none rounded-full py-3 px-5 text-sm text-white focus:ring-1 focus:ring-indigo-500 placeholder-zinc-600" 
+                                placeholder="Command Aura..." 
+                            />
+                            <button onClick={() => handleInput({text: prompt})} className="absolute right-2 p-2 bg-indigo-600 rounded-full text-white hover:bg-indigo-500 transition-colors"><Play size={14}/></button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* TELEGRAM */}
+            {/* TELEGRAM VIEW */}
             {activeView === 'telegram' && (
-                <div className="absolute inset-0 z-10">
+                <div className="flex-1 h-full overflow-hidden">
                     <TelegramTerminal />
                 </div>
             )}
 
-            {/* FILES */}
+            {/* FILES VIEW */}
             {activeView === 'files' && (
-                <div className="absolute inset-0 bg-zinc-950 flex flex-col">
-                    <div className="flex-1 overflow-hidden flex">
+                <div className="flex-1 h-full bg-zinc-950 flex flex-col overflow-hidden">
+                    <div className="flex-1 flex overflow-hidden">
                         <FileExplorer 
                             files={files}
                             selectedFile={selectedFile}
@@ -445,26 +508,26 @@ export const AgentWorkspace: React.FC = () => {
                             onDelete={(name) => { vfs.deleteFile(name); refreshFiles(); }}
                             onUpload={() => {}}
                         />
-                        <div className="flex-1 bg-zinc-900 p-4">
+                        <div className="flex-1 bg-zinc-900 p-4 overflow-hidden flex flex-col">
                             {selectedFile && files[selectedFile] ? (
                                 <textarea value={files[selectedFile].content} onChange={(e) => { vfs.writeFile(selectedFile, e.target.value); refreshFiles(); }} className="w-full h-full bg-transparent text-zinc-300 font-mono text-xs resize-none focus:outline-none" spellCheck={false}/>
-                            ) : <div className="text-zinc-600">Select a file</div>}
+                            ) : <div className="text-zinc-600 flex items-center justify-center h-full">Select a file to edit</div>}
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* PREVIEW */}
+            {/* PREVIEW VIEW */}
             {activeView === 'preview' && (
-                <div className="absolute inset-0 bg-white">
+                <div className="flex-1 h-full bg-white overflow-hidden">
                     <iframe ref={previewRef} className="w-full h-full border-none" sandbox="allow-scripts allow-modals allow-same-origin allow-forms" />
                 </div>
             )}
 
-            {/* SETTINGS */}
+            {/* SETTINGS VIEW */}
             {activeView === 'settings' && (
-                <div className="absolute inset-0 bg-zinc-950 flex flex-col items-center p-6 overflow-y-auto">
-                    <div className="w-full max-w-3xl space-y-6">
+                <div className="flex-1 h-full bg-zinc-950 flex flex-col items-center p-6 overflow-y-auto">
+                    <div className="w-full max-w-3xl space-y-6 pb-safe">
                         <h2 className="text-2xl font-light text-white mb-6">Settings</h2>
                         
                         <div className="flex space-x-1 bg-zinc-900 p-1 rounded-lg w-fit">
@@ -504,6 +567,16 @@ export const AgentWorkspace: React.FC = () => {
                                     <label className="text-xs font-bold text-zinc-500 uppercase">Fallback Model ID (Recovery)</label>
                                     <input type="text" value={config.fallbackModelId} onChange={(e) => setConfig({...config, fallbackModelId: e.target.value})} className="w-full bg-black border border-zinc-800 rounded-lg p-3 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. gemini-2.0-flash" />
                                 </div>
+
+                                <div className="space-y-2 pt-2 border-t border-zinc-800">
+                                     <div className="flex items-center justify-between">
+                                        <label className="text-xs font-bold text-zinc-500 uppercase">Autonomy Engine</label>
+                                        <button onClick={() => setConfig({...config, enableAutonomy: !config.enableAutonomy})} className={`w-10 h-5 rounded-full transition-colors relative ${config.enableAutonomy ? 'bg-emerald-500' : 'bg-zinc-700'}`}>
+                                            <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${config.enableAutonomy ? 'left-6' : 'left-1'}`}></div>
+                                        </button>
+                                     </div>
+                                     <p className="text-[10px] text-zinc-500">Allows Aura to run background tasks independently.</p>
+                                </div>
                             </div>
                         )}
                         <button onClick={saveConfiguration} className="w-full bg-white text-black font-bold py-3 rounded-xl hover:bg-zinc-200 transition-colors flex items-center justify-center gap-2">
@@ -514,8 +587,9 @@ export const AgentWorkspace: React.FC = () => {
             )}
           </div>
           
+          {/* CONSOLE DRAWER */}
           {showConsole && (
-              <div className="h-64 bg-zinc-950 border-t border-zinc-800 flex flex-col shrink-0">
+              <div className="h-64 bg-zinc-950 border-t border-zinc-800 flex flex-col shrink-0 pb-safe shadow-2xl z-40">
                   <div className="flex items-center justify-between px-3 py-1 bg-zinc-900 border-b border-zinc-800">
                       <div className="flex items-center gap-2">
                          <Terminal size={12} className="text-amber-500"/>
@@ -526,7 +600,7 @@ export const AgentWorkspace: React.FC = () => {
                   <div className="flex-1 overflow-y-auto p-3 font-mono text-xs space-y-2">
                       {consoleLogs.length === 0 && <div className="text-zinc-600 italic">No background activity logged yet. Enable 'Autonomy' in settings to start the loop.</div>}
                       {consoleLogs.map(log => (
-                          <div key={log.id} className="border-l-2 border-zinc-800 pl-2">
+                          <div key={log.id} className="border-l-2 border-zinc-800 pl-2 animate-fade-in">
                               <div className="flex items-center gap-2 mb-1">
                                   <span className="text-zinc-500 text-[10px]">{new Date(log.timestamp).toLocaleTimeString()}</span>
                                   <span className={`text-[10px] font-bold px-1 rounded ${log.type==='error'?'bg-red-900/50 text-red-400': log.type==='action'?'bg-blue-900/30 text-blue-400': 'bg-zinc-800 text-zinc-400'}`}>{log.type.toUpperCase()}</span>
@@ -542,7 +616,7 @@ export const AgentWorkspace: React.FC = () => {
       </div>
 
       {showOnboarding && (
-          <div className="absolute inset-0 z-[100] bg-black flex flex-col items-center justify-center p-6">
+          <div className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-sm flex flex-col items-center justify-center p-6">
               <div className="w-full max-w-lg space-y-8 text-center animate-fade-in">
                   <div className="flex flex-col items-center gap-4">
                       <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-indigo-900/50">

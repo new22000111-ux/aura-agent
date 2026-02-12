@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Aura Agent</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -23,6 +23,13 @@
             },
             animation: {
               'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'fade-in': 'fadeIn 0.3s ease-in-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              }
             }
           },
         },
@@ -31,15 +38,15 @@
     <style>
       /* Minimalist scrollbar */
       ::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
+        width: 4px;
+        height: 4px;
       }
       ::-webkit-scrollbar-track {
         background: transparent;
       }
       ::-webkit-scrollbar-thumb {
         background: #3f3f46;
-        border-radius: 3px;
+        border-radius: 2px;
       }
       ::-webkit-scrollbar-thumb:hover {
         background: #52525b;
@@ -47,6 +54,7 @@
       body {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        overscroll-behavior: none;
       }
       /* Markdown specific styles */
       .markdown-body ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; }
@@ -54,6 +62,11 @@
       .markdown-body table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
       .markdown-body th, .markdown-body td { border: 1px solid #3f3f46; padding: 0.5rem; text-align: left; }
       .markdown-body th { background-color: #27272a; }
+      
+      /* Safe Area Utilities */
+      .pt-safe { padding-top: env(safe-area-inset-top); }
+      .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+      .h-safe-screen { height: 100dvh; }
     </style>
   <script type="importmap">
 {
@@ -69,7 +82,7 @@
 }
 </script>
 </head>
-  <body class="bg-white text-zinc-900 h-screen w-screen overflow-hidden selection:bg-zinc-100">
+  <body class="bg-black text-zinc-100 h-full w-full overflow-hidden selection:bg-indigo-500/30">
     <div id="root" class="h-full w-full"></div>
   </body>
 </html>
