@@ -1,0 +1,9 @@
+{
+  "name": "Aura Agent",
+  "description": "A minimalist, voice-first AI agent powered by Gemini 2.5 and 3.0 models. Features real-time voice conversation, grounded search/maps, and high-fidelity image generation.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera",
+    "geolocation"
+  ]
+}
