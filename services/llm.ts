@@ -89,7 +89,8 @@ export class LLMService {
                 }
                 
                 // Collect tool calls if present (Gemini sends them usually in the final chunk or a specific chunk)
-                const calls = chunk.candidates?.[0]?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+                // In Gemini 1.40.0+, parts can contain thought_signature next to functionCall, so we must return the full part object.
+                const calls = chunk.candidates?.[0]?.content?.parts?.filter((p: any) => p.functionCall);
                 if (calls && calls.length > 0) {
                     toolCalls.push(...calls);
                 }
