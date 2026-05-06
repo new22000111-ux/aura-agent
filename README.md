@@ -2,7 +2,7 @@
 
 **A lightweight, secure, and autonomous AI agent that runs locally in your browser or web hosting.**
 
-Aura Agent is a minimalist, voice-first AI assistant powered by **Gemini 2.5 & 3.0** models. It's designed to be secure by default, with all capabilities restricted to browser sandboxing, while remaining powerful and extensible through sub-agents.
+Aura Agent is a minimalist, work-first AI assistant powered by **Gemini 2.5 & 3.0** models. It's designed to be secure by default, with all capabilities restricted to browser sandboxing, while remaining powerful and extensible through sub-agents.
 
 ---
 
