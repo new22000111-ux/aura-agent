@@ -379,10 +379,13 @@ export class AgentRuntime {
         const toolResponses = [];
 
         if (toolCalls.length > 0) {
-            for (const call of toolCalls) {
-                // In Gemini 1.40.0+, the original tool call part contains thought_signature which is required when passing back the history.
-                // It's best to push the original call object to include the thought_signature if present.
-                historyToolCalls.push({ functionCall: call });
+            for (const callPart of toolCalls) {
+                // In Gemini 1.40.0+, the original tool call part contains thought_signature next to functionCall,
+                // which is required when passing back the history.
+                // The llm.ts now returns the entire part object (with functionCall and thought_signature).
+                historyToolCalls.push(callPart);
+
+                const call = callPart.functionCall;
                 this.log('action', `${call.name}`, agentName, null, processId);
                 
                 let executionResult: any = { status: 'ok' };
