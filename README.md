@@ -1,7 +1,3 @@
-<div align="center">
-<img width="1200" height="475" alt="Aura Agent Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # 🌟 Aura Agent
 
 **A lightweight, secure, and autonomous AI agent that runs locally in your browser.**
