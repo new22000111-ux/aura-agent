@@ -4,6 +4,7 @@ import { agentBus } from "./agentBus";
 import { AgentLog, LLMConfig, DEFAULT_LLM_CONFIG } from "../types";
 import { githubService } from "./github";
 import { LLMService } from "./llm";
+import { isValidUrl } from "../utils/security";
 
 // Fallback in case file is missing
 export const DEFAULT_SYSTEM_INSTRUCTION = `
@@ -496,6 +497,9 @@ export class AgentRuntime {
                     return { status: 'captured' }; 
                 } else return { error: "Unavailable" };
         case 'read_website':
+            if (!isValidUrl(args.url)) {
+                return { error: "Invalid or restricted URL." };
+            }
             const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(args.url)}`;
             const resp = await fetch(proxyUrl);
             const rData = await resp.json();
@@ -504,6 +508,9 @@ export class AgentRuntime {
             try {
                 const q = encodeURIComponent(args.query);
                 const ddgUrl = `https://duckduckgo.com/html/?q=${q}`;
+                if (!isValidUrl(ddgUrl)) {
+                    return { error: "Invalid search query." };
+                }
                 const searchProxy = `https://api.allorigins.win/get?url=${encodeURIComponent(ddgUrl)}`;
                 const searchRes = await fetch(searchProxy);
                 const searchData = await searchRes.json();
